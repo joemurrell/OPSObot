@@ -1,6 +1,7 @@
 """
-DarkstarAIC - DCS Air Control Communication Discord Bot
-PDF-grounded Q&A and Quiz system using OpenAI Assistants API (GPT-4.1-mini))
+OPSObot - DCS Squadron SOP Discord Bot
+Multi-guild PDF-grounded Q&A and Quiz system using OpenAI Assistants API
+Allows each Discord server to upload their own SOP documents and configure their own OpenAI API keys
 """
 import os
 import asyncio
@@ -9,7 +10,7 @@ import re
 import random
 import logging
 from datetime import datetime, timedelta
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple, Dict
 from collections import Counter
 import discord
 from discord import app_commands
@@ -18,8 +19,8 @@ from fuzzywuzzy import fuzz
 
 # Environment variables
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-ASSISTANT_ID = os.environ["ASSISTANT_ID"]
+# Global OpenAI API key is now optional - guilds can configure their own
+GLOBAL_OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 # --- Discord client setup ---
 intents = discord.Intents.default()
@@ -27,11 +28,70 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# --- OpenAI client (with v2 assistants) ---
-oai = OpenAI(
-    api_key=OPENAI_API_KEY,
-    default_headers={"OpenAI-Beta": "assistants=v2"}
-)
+# --- Guild Configuration Storage ---
+CONFIG_FILE = "guild_configs.json"
+
+def load_guild_configs() -> Dict:
+    """Load guild configurations from file."""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading guild configs: {e}")
+            return {}
+    return {}
+
+def save_guild_configs(configs: Dict):
+    """Save guild configurations to file."""
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(configs, f, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving guild configs: {e}")
+
+GUILD_CONFIGS = load_guild_configs()
+
+def get_openai_client(guild_id: Optional[int]) -> Optional[OpenAI]:
+    """
+    Get OpenAI client for a specific guild.
+    Returns None if guild is not configured.
+    """
+    if guild_id is None:
+        # DM - use global key if available
+        if GLOBAL_OPENAI_API_KEY:
+            return OpenAI(
+                api_key=GLOBAL_OPENAI_API_KEY,
+                default_headers={"OpenAI-Beta": "assistants=v2"}
+            )
+        return None
+    
+    guild_key = str(guild_id)
+    if guild_key in GUILD_CONFIGS and "api_key" in GUILD_CONFIGS[guild_key]:
+        api_key = GUILD_CONFIGS[guild_key]["api_key"]
+        return OpenAI(
+            api_key=api_key,
+            default_headers={"OpenAI-Beta": "assistants=v2"}
+        )
+    elif GLOBAL_OPENAI_API_KEY:
+        # Fall back to global key
+        return OpenAI(
+            api_key=GLOBAL_OPENAI_API_KEY,
+            default_headers={"OpenAI-Beta": "assistants=v2"}
+        )
+    
+    return None
+
+def get_assistant_id(guild_id: Optional[int]) -> Optional[str]:
+    """Get the assistant ID for a specific guild."""
+    if guild_id is None:
+        return None
+    
+    guild_key = str(guild_id)
+    if guild_key in GUILD_CONFIGS:
+        return GUILD_CONFIGS[guild_key].get("assistant_id")
+    
+    return None
 
 # Configure logging for Railway compatibility
 # Railway prefers structured JSON logs with clear levels
@@ -247,17 +307,27 @@ async def check_bot_permissions(interaction: discord.Interaction) -> Tuple[bool,
     
     return False, "\n".join(error_parts)
 
-async def ask_assistant(user_msg: str, timeout: int = 30, temperature: float = None) -> str:
+async def ask_assistant(user_msg: str, guild_id: Optional[int] = None, timeout: int = 30, temperature: float = None) -> str:
     """
     Ask the OpenAI Assistant a question using Assistants API v2.
     Uses File Search to ground responses in the uploaded PDF.
     
     Args:
         user_msg: The message/prompt to send to the assistant
+        guild_id: The guild ID to use for getting the appropriate OpenAI client and assistant
         timeout: Maximum seconds to wait for response
         temperature: Optional temperature for response generation (0.0-2.0)
     """
-    api_logger.debug(f"ask_assistant called: msg_len={len(user_msg)} timeout={timeout} temperature={temperature}")
+    api_logger.debug(f"ask_assistant called: msg_len={len(user_msg)} guild_id={guild_id} timeout={timeout} temperature={temperature}")
+    
+    # Get guild-specific OpenAI client and assistant ID
+    oai = get_openai_client(guild_id)
+    if not oai:
+        return "❌ This server hasn't been configured yet. An admin needs to run `/setup` first."
+    
+    assistant_id = get_assistant_id(guild_id)
+    if not assistant_id:
+        return "❌ No assistant configured for this server. An admin needs to run `/setup` first."
     
     try:
         # Create a new thread for this question
@@ -275,7 +345,7 @@ async def ask_assistant(user_msg: str, timeout: int = 30, temperature: float = N
         # Build run parameters
         run_params = {
             "thread_id": thread.id,
-            "assistant_id": ASSISTANT_ID
+            "assistant_id": assistant_id
         }
         
         # Add optional parameters if provided
@@ -554,11 +624,16 @@ def deduplicate_questions(questions: List[dict]) -> Tuple[List[dict], List[str]]
     return unique, topics
 
 
-async def generate_quiz(topic_hint: str = "", num_questions: int = 6) -> Optional[List[dict]]:
+async def generate_quiz(topic_hint: str = "", num_questions: int = 6, guild_id: Optional[int] = None) -> Optional[List[dict]]:
     """
     Generate a quiz from the PDF using the Assistant.
     Enforces diversity by deduplicating questions and regenerating if needed.
     Returns a list of question dicts or None on failure.
+    
+    Args:
+        topic_hint: Optional topic to focus on
+        num_questions: Number of questions to generate
+        guild_id: Guild ID for getting the appropriate OpenAI client
     """
     max_regeneration_attempts = 3
     unique_questions = []
@@ -597,8 +672,8 @@ If you cannot generate {num_questions} distinct topics, return fewer items with 
 IMPORTANT: Return ONLY the JSON array, no other text."""
 
     # Call assistant with diversity parameters
-    api_logger.info(f"Generating quiz: topic_hint='{topic_hint}', num_questions={num_questions}")
-    reply = await ask_assistant(prompt, timeout=45, temperature=0.7)
+    api_logger.info(f"Generating quiz: topic_hint='{topic_hint}', num_questions={num_questions}, guild_id={guild_id}")
+    reply = await ask_assistant(prompt, guild_id=guild_id, timeout=45, temperature=0.7)
     
     # Log the raw assistant reply
     api_logger.debug(f"Assistant raw reply (first 1000 chars): {reply[:1000]}")
@@ -674,7 +749,7 @@ Each question MUST include a unique "topic" tag (different from: {', '.join(used
 
 IMPORTANT: Return ONLY the JSON array, no other text."""
             
-            regen_reply = await ask_assistant(regen_prompt, timeout=45, temperature=0.8)
+            regen_reply = await ask_assistant(regen_prompt, guild_id=guild_id, timeout=45, temperature=0.8)
             api_logger.debug(f"Regeneration reply (first 500 chars): {regen_reply[:500]}")
             
             try:
@@ -898,7 +973,7 @@ async def display_quiz_results(channel, channel_id: int):
 
 # --- Discord Commands ---
 
-@tree.command(name="ask", description="Ask a question about the ACC documentation")
+@tree.command(name="ask", description="Ask a question about the SOP documentation")
 async def ask_command(interaction: discord.Interaction, question: str):
     """Ask the bot a question grounded in the uploaded PDF."""
     discord_logger.info(f"/ask command: user={interaction.user.name}({interaction.user.id}) guild={interaction.guild.name if interaction.guild else 'DM'}({interaction.guild_id if interaction.guild else 'N/A'}) channel={interaction.channel_id} question='{question[:100]}'")
@@ -915,7 +990,7 @@ async def ask_command(interaction: discord.Interaction, question: str):
     enhanced_question = f"{question}\n\n(Answer using ONLY information from the attached PDF documentation. Include page numbers when possible. If the answer isn't in the PDF, say so clearly. Your response MUST be less than 2000 characters to fit in a Discord message.)"
     
     api_logger.debug(f"Sending question to assistant API: '{enhanced_question[:100]}'")
-    answer = await ask_assistant(enhanced_question)
+    answer = await ask_assistant(enhanced_question, guild_id=interaction.guild_id)
     api_logger.debug(f"Received answer from assistant API (length={len(answer)})")
     
     # Discord has a 2000 character limit
@@ -927,7 +1002,7 @@ async def ask_command(interaction: discord.Interaction, question: str):
     discord_logger.info(f"/ask completed for user {interaction.user.name}({interaction.user.id})")
 
 
-@tree.command(name="quiz_start", description="Start a quiz from the ACC documentation")
+@tree.command(name="quiz_start", description="Start a quiz from the SOP documentation")
 async def quiz_start(interaction: discord.Interaction, topic: str = "", questions: int = 6, duration: int = 5):
     """Start a new quiz session in this channel."""
     discord_logger.info(f"/quiz_start command: user={interaction.user.name}({interaction.user.id}) guild={interaction.guild.name if interaction.guild else 'DM'}({interaction.guild_id if interaction.guild else 'N/A'}) channel={interaction.channel_id} topic='{topic}' questions={questions} duration={duration}")
@@ -966,7 +1041,7 @@ async def quiz_start(interaction: discord.Interaction, topic: str = "", question
     await interaction.response.defer(thinking=True)
     
     quiz_logger.info(f"Generating quiz: topic='{topic}' questions={questions} duration={duration} for channel {interaction.channel_id}")
-    quiz_questions = await generate_quiz(topic_hint=topic, num_questions=questions)
+    quiz_questions = await generate_quiz(topic_hint=topic, num_questions=questions, guild_id=interaction.guild_id)
     
     if not quiz_questions:
         quiz_logger.error(f"Failed to generate quiz for channel {interaction.channel_id}")
@@ -1188,17 +1263,37 @@ async def info_command(interaction: discord.Interaction):
         await interaction.response.send_message(perm_error, ephemeral=True)
         return
     
+    # Check if this guild is configured
+    guild_key = str(interaction.guild_id) if interaction.guild_id else None
+    is_configured = guild_key and guild_key in GUILD_CONFIGS and "assistant_id" in GUILD_CONFIGS[guild_key]
+    
     embed = discord.Embed(
-        title="✈️ DarkstarAIC",
-        description="AI-powered Q&A and quiz bot for Air Control Communication",
+        title="🎯 OPSObot",
+        description="AI-powered Q&A and quiz bot for DCS Squadron SOPs",
         color=0x2d5016  # Forest green
     )
-    embed.add_field(name="Model", value="GPT-4.1-mini", inline=True)
+    embed.add_field(name="Model", value="GPT-4 (via OpenAI Assistants)", inline=True)
     embed.add_field(name="Servers", value=str(len(client.guilds)), inline=True)
-    embed.add_field(name="Version", value="1.0.0", inline=True)
+    embed.add_field(name="Version", value="2.0.0", inline=True)
+    
+    if is_configured:
+        embed.add_field(name="Server Status", value="✅ Configured", inline=False)
+        # Show document count if available
+        doc_count = len(GUILD_CONFIGS[guild_key].get("documents", []))
+        embed.add_field(name="Documents", value=str(doc_count), inline=True)
+    else:
+        embed.add_field(name="Server Status", value="⚠️ Not configured - Admin needs to run `/setup`", inline=False)
+    
     embed.add_field(
         name="Commands",
-        value="• `/ask` - Ask questions\n• `/quiz_start` - Start timed quiz\n• `/quiz_answer` - Answer question\n• `/quiz_score` - View progress\n• `/quiz_end` - End quiz",
+        value="• `/setup` - Configure bot (admin only)\n"
+              "• `/upload` - Upload SOP documents (admin only)\n"
+              "• `/list_documents` - View uploaded documents\n"
+              "• `/ask` - Ask questions about SOPs\n"
+              "• `/quiz_start` - Start timed quiz\n"
+              "• `/quiz_answer` - Answer question\n"
+              "• `/quiz_score` - View progress\n"
+              "• `/quiz_end` - End quiz",
         inline=False
     )
     embed.set_footer(text="Powered by OpenAI Assistants API v2")
@@ -1206,22 +1301,257 @@ async def info_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+@tree.command(name="setup", description="Configure the bot for this server (admin only)")
+async def setup_command(interaction: discord.Interaction, api_key: str):
+    """Configure OpenAI API key and create assistant for this guild."""
+    discord_logger.info(f"/setup command: user={interaction.user.name}({interaction.user.id}) guild={interaction.guild.name if interaction.guild else 'DM'}({interaction.guild_id})")
+    
+    # Only allow in guilds, not DMs
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
+        return
+    
+    # Check if user is admin
+    if not interaction.user.guild_permissions.administrator:
+        discord_logger.warning(f"/setup denied: user {interaction.user.name}({interaction.user.id}) is not admin")
+        await interaction.response.send_message("❌ You need Administrator permissions to use this command.", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    
+    try:
+        # Create OpenAI client with provided key
+        test_client = OpenAI(
+            api_key=api_key,
+            default_headers={"OpenAI-Beta": "assistants=v2"}
+        )
+        
+        # Create a new assistant for this guild
+        assistant = test_client.beta.assistants.create(
+            name=f"OPSObot - {interaction.guild.name}",
+            instructions="""You are an expert assistant for DCS (Digital Combat Simulator) squadron Standard Operating Procedures (SOPs).
+            
+Your role is to:
+- Answer questions based ONLY on the uploaded SOP documents
+- Provide accurate page numbers when citing information
+- Generate quiz questions to test squadron members' knowledge
+- Help squadron members learn and stay sharp on their procedures
+
+When answering questions:
+- Always cite page numbers from the documents
+- If information isn't in the documents, clearly state that
+- Be concise but thorough
+- Focus on practical application
+
+When generating quiz questions:
+- Create diverse questions covering different topics
+- Include 4 multiple choice options
+- Provide clear explanations with page references
+- Focus on operationally relevant knowledge""",
+            model="gpt-4o-mini",
+            tools=[{"type": "file_search"}]
+        )
+        
+        # Create a vector store for documents
+        vector_store = test_client.beta.vector_stores.create(
+            name=f"OPSObot - {interaction.guild.name} - SOPs"
+        )
+        
+        # Update assistant to use vector store
+        test_client.beta.assistants.update(
+            assistant_id=assistant.id,
+            tool_resources={"file_search": {"vector_store_ids": [vector_store.id]}}
+        )
+        
+        # Store configuration
+        guild_key = str(interaction.guild_id)
+        GUILD_CONFIGS[guild_key] = {
+            "api_key": api_key,
+            "assistant_id": assistant.id,
+            "vector_store_id": vector_store.id,
+            "documents": [],
+            "configured_at": datetime.utcnow().isoformat(),
+            "configured_by": str(interaction.user.id)
+        }
+        save_guild_configs(GUILD_CONFIGS)
+        
+        discord_logger.info(f"Setup complete for guild {interaction.guild.name}({interaction.guild_id}): assistant={assistant.id}")
+        
+        await interaction.followup.send(
+            f"✅ **Setup Complete!**\n\n"
+            f"• OpenAI API key configured\n"
+            f"• Assistant created: `{assistant.id}`\n"
+            f"• Vector store created: `{vector_store.id}`\n\n"
+            f"Next steps:\n"
+            f"1. Use `/upload` to upload your SOP documents\n"
+            f"2. Use `/ask` to ask questions about your SOPs\n"
+            f"3. Use `/quiz_start` to test your squadron's knowledge\n\n"
+            f"⚠️ **Security Note:** Your API key is stored locally and used only for this server.",
+            ephemeral=True
+        )
+        
+    except Exception as e:
+        discord_logger.error(f"Setup failed for guild {interaction.guild_id}: {e}", exc_info=True)
+        await interaction.followup.send(
+            f"❌ **Setup Failed**\n\n"
+            f"Error: {str(e)}\n\n"
+            f"Please check:\n"
+            f"• Your API key is valid\n"
+            f"• Your API key has sufficient credits\n"
+            f"• You have access to the Assistants API",
+            ephemeral=True
+        )
+
+
+@tree.command(name="upload", description="Upload SOP documents to the bot (admin only)")
+async def upload_command(interaction: discord.Interaction, document: discord.Attachment):
+    """Upload a document to the guild's assistant."""
+    discord_logger.info(f"/upload command: user={interaction.user.name}({interaction.user.id}) guild={interaction.guild.name if interaction.guild else 'DM'}({interaction.guild_id}) file={document.filename}")
+    
+    # Only allow in guilds
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
+        return
+    
+    # Check if user is admin
+    if not interaction.user.guild_permissions.administrator:
+        discord_logger.warning(f"/upload denied: user {interaction.user.name}({interaction.user.id}) is not admin")
+        await interaction.response.send_message("❌ You need Administrator permissions to use this command.", ephemeral=True)
+        return
+    
+    # Check if guild is configured
+    guild_key = str(interaction.guild_id)
+    if guild_key not in GUILD_CONFIGS or "assistant_id" not in GUILD_CONFIGS[guild_key]:
+        await interaction.response.send_message("❌ This server hasn't been configured yet. Run `/setup` first.", ephemeral=True)
+        return
+    
+    # Check file type (only allow PDFs for now)
+    if not document.filename.lower().endswith('.pdf'):
+        await interaction.response.send_message("❌ Only PDF files are supported currently.", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    
+    try:
+        # Download the file
+        file_data = await document.read()
+        
+        # Get OpenAI client for this guild
+        oai = get_openai_client(interaction.guild_id)
+        if not oai:
+            await interaction.followup.send("❌ Failed to get OpenAI client.", ephemeral=True)
+            return
+        
+        # Upload file to OpenAI
+        file_obj = oai.files.create(
+            file=(document.filename, file_data),
+            purpose="assistants"
+        )
+        
+        # Add file to vector store
+        vector_store_id = GUILD_CONFIGS[guild_key]["vector_store_id"]
+        oai.beta.vector_stores.files.create(
+            vector_store_id=vector_store_id,
+            file_id=file_obj.id
+        )
+        
+        # Update config
+        if "documents" not in GUILD_CONFIGS[guild_key]:
+            GUILD_CONFIGS[guild_key]["documents"] = []
+        
+        GUILD_CONFIGS[guild_key]["documents"].append({
+            "filename": document.filename,
+            "file_id": file_obj.id,
+            "uploaded_at": datetime.utcnow().isoformat(),
+            "uploaded_by": str(interaction.user.id),
+            "size_bytes": len(file_data)
+        })
+        save_guild_configs(GUILD_CONFIGS)
+        
+        discord_logger.info(f"Document uploaded for guild {interaction.guild_id}: {document.filename} (file_id={file_obj.id})")
+        
+        await interaction.followup.send(
+            f"✅ **Document Uploaded!**\n\n"
+            f"• Filename: `{document.filename}`\n"
+            f"• File ID: `{file_obj.id}`\n"
+            f"• Size: {len(file_data) / 1024:.1f} KB\n\n"
+            f"The document is now available for questions and quizzes!",
+            ephemeral=True
+        )
+        
+    except Exception as e:
+        discord_logger.error(f"Upload failed for guild {interaction.guild_id}: {e}", exc_info=True)
+        await interaction.followup.send(
+            f"❌ **Upload Failed**\n\n"
+            f"Error: {str(e)}",
+            ephemeral=True
+        )
+
+
+@tree.command(name="list_documents", description="List all uploaded SOP documents")
+async def list_documents_command(interaction: discord.Interaction):
+    """List all documents uploaded to this guild's assistant."""
+    discord_logger.info(f"/list_documents command: user={interaction.user.name}({interaction.user.id}) guild={interaction.guild.name if interaction.guild else 'DM'}({interaction.guild_id})")
+    
+    # Only allow in guilds
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
+        return
+    
+    # Check if guild is configured
+    guild_key = str(interaction.guild_id)
+    if guild_key not in GUILD_CONFIGS or "assistant_id" not in GUILD_CONFIGS[guild_key]:
+        await interaction.response.send_message("❌ This server hasn't been configured yet. Run `/setup` first.", ephemeral=True)
+        return
+    
+    documents = GUILD_CONFIGS[guild_key].get("documents", [])
+    
+    if not documents:
+        await interaction.response.send_message(
+            "📚 **No documents uploaded yet.**\n\n"
+            "Use `/upload` to add SOP documents (admin only).",
+            ephemeral=True
+        )
+        return
+    
+    embed = discord.Embed(
+        title="📚 Uploaded SOP Documents",
+        description=f"{len(documents)} document(s) available",
+        color=0x2d5016
+    )
+    
+    for i, doc in enumerate(documents, 1):
+        uploaded_at = datetime.fromisoformat(doc["uploaded_at"]).strftime("%Y-%m-%d %H:%M UTC")
+        size_kb = doc.get("size_bytes", 0) / 1024
+        
+        embed.add_field(
+            name=f"{i}. {doc['filename']}",
+            value=f"Uploaded: {uploaded_at}\nSize: {size_kb:.1f} KB\nFile ID: `{doc['file_id']}`",
+            inline=False
+        )
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 @client.event
 async def on_ready():
     """Called when the bot is ready."""
     await tree.sync()
-    discord_logger.info(f"✈️ DarkstarAIC is online!")
+    discord_logger.info(f"🎯 OPSObot is online!")
     discord_logger.info(f"📚 Connected to {len(client.guilds)} server(s)")
-    discord_logger.info(f"🤖 Using GPT-4.1-mini with Assistants API v2")
+    discord_logger.info(f"🤖 Using GPT-4 with Assistants API v2")
     discord_logger.info(f"Bot user: {client.user.name}#{client.user.discriminator} (ID: {client.user.id})")
     
     # Log guild information
     for guild in client.guilds:
-        discord_logger.info(f"  - Guild: {guild.name} (ID: {guild.id}, Members: {guild.member_count})")
+        guild_key = str(guild.id)
+        is_configured = guild_key in GUILD_CONFIGS and "assistant_id" in GUILD_CONFIGS[guild_key]
+        status = "✅ Configured" if is_configured else "⚠️ Not configured"
+        discord_logger.info(f"  - Guild: {guild.name} (ID: {guild.id}, Members: {guild.member_count}) - {status}")
     
-    print(f"✈️ DarkstarAIC is online!")
+    print(f"🎯 OPSObot is online!")
     print(f"📚 Connected to {len(client.guilds)} server(s)")
-    print(f"🤖 Using GPT-4.1-mini with Assistants API v2")
+    print(f"🤖 Using GPT-4 with Assistants API v2")
 
 
 if __name__ == "__main__":
