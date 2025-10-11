@@ -80,6 +80,11 @@ Upload your squadron's SOP PDFs. The bot will process and index them.
 /list_documents
 ```
 
+4. **Remove a document** (if needed):
+```
+/remove_document file_id:<file-id-from-list>
+```
+
 ### Using the Bot
 
 **Ask questions about your SOPs**:

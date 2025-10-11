@@ -1289,6 +1289,7 @@ async def info_command(interaction: discord.Interaction):
         value="• `/setup` - Configure bot (admin only)\n"
               "• `/upload` - Upload SOP documents (admin only)\n"
               "• `/list_documents` - View uploaded documents\n"
+              "• `/remove_document` - Remove a document (admin only)\n"
               "• `/ask` - Ask questions about SOPs\n"
               "• `/quiz_start` - Start timed quiz\n"
               "• `/quiz_answer` - Answer question\n"
@@ -1531,6 +1532,95 @@ async def list_documents_command(interaction: discord.Interaction):
         )
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@tree.command(name="remove_document", description="Remove an uploaded SOP document (admin only)")
+async def remove_document_command(interaction: discord.Interaction, file_id: str):
+    """Remove a document from the guild's assistant."""
+    discord_logger.info(f"/remove_document command: user={interaction.user.name}({interaction.user.id}) guild={interaction.guild.name if interaction.guild else 'DM'}({interaction.guild_id}) file_id={file_id}")
+    
+    # Only allow in guilds
+    if not interaction.guild:
+        await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
+        return
+    
+    # Check if user is admin
+    if not interaction.user.guild_permissions.administrator:
+        discord_logger.warning(f"/remove_document denied: user {interaction.user.name}({interaction.user.id}) is not admin")
+        await interaction.response.send_message("❌ You need Administrator permissions to use this command.", ephemeral=True)
+        return
+    
+    # Check if guild is configured
+    guild_key = str(interaction.guild_id)
+    if guild_key not in GUILD_CONFIGS or "assistant_id" not in GUILD_CONFIGS[guild_key]:
+        await interaction.response.send_message("❌ This server hasn't been configured yet. Run `/setup` first.", ephemeral=True)
+        return
+    
+    documents = GUILD_CONFIGS[guild_key].get("documents", [])
+    
+    # Find the document
+    doc_to_remove = None
+    doc_index = None
+    for i, doc in enumerate(documents):
+        if doc["file_id"] == file_id:
+            doc_to_remove = doc
+            doc_index = i
+            break
+    
+    if not doc_to_remove:
+        await interaction.response.send_message(
+            f"❌ Document with file ID `{file_id}` not found.\n\n"
+            f"Use `/list_documents` to see all uploaded documents.",
+            ephemeral=True
+        )
+        return
+    
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    
+    try:
+        # Get OpenAI client for this guild
+        oai = get_openai_client(interaction.guild_id)
+        if not oai:
+            await interaction.followup.send("❌ Failed to get OpenAI client.", ephemeral=True)
+            return
+        
+        # Remove file from vector store
+        vector_store_id = GUILD_CONFIGS[guild_key]["vector_store_id"]
+        try:
+            oai.beta.vector_stores.files.delete(
+                vector_store_id=vector_store_id,
+                file_id=file_id
+            )
+        except Exception as e:
+            discord_logger.warning(f"Failed to remove file from vector store (continuing anyway): {e}")
+        
+        # Delete file from OpenAI
+        try:
+            oai.files.delete(file_id)
+        except Exception as e:
+            discord_logger.warning(f"Failed to delete file from OpenAI (continuing anyway): {e}")
+        
+        # Remove from config
+        del GUILD_CONFIGS[guild_key]["documents"][doc_index]
+        save_guild_configs(GUILD_CONFIGS)
+        
+        discord_logger.info(f"Document removed for guild {interaction.guild_id}: {doc_to_remove['filename']} (file_id={file_id})")
+        
+        await interaction.followup.send(
+            f"✅ **Document Removed!**\n\n"
+            f"• Filename: `{doc_to_remove['filename']}`\n"
+            f"• File ID: `{file_id}`\n\n"
+            f"The document is no longer available for questions and quizzes.",
+            ephemeral=True
+        )
+        
+    except Exception as e:
+        discord_logger.error(f"Remove document failed for guild {interaction.guild_id}: {e}", exc_info=True)
+        await interaction.followup.send(
+            f"❌ **Removal Failed**\n\n"
+            f"Error: {str(e)}",
+            ephemeral=True
+        )
 
 
 @client.event
