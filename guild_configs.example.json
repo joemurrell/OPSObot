@@ -1,8 +1,8 @@
 {
   "123456789012345678": {
-    "api_key": "sk-proj-...",
     "assistant_id": "asst_...",
     "vector_store_id": "vs_...",
+    "guild_name": "Example Squadron",
     "documents": [
       {
         "filename": "squadron_sop.pdf",
@@ -14,5 +14,6 @@
     ],
     "configured_at": "2025-01-15T11:00:00",
     "configured_by": "987654321098765432"
-  }
+  },
+  "note": "API keys are NO LONGER stored per guild - using centralized OPENAI_API_KEY"
 }

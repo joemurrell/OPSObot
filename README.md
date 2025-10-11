@@ -1,21 +1,36 @@
 # OPSObot 🎯
 
-AI-powered Discord bot for DCS Squadron Standard Operating Procedures (SOPs). Built with OpenAI Assistants API, OPSObot helps squadrons upload their SOP documents and provides interactive Q&A and quiz functionality to keep members sharp on procedures.
+AI-powered Discord bot for DCS Squadron Standard Operating Procedures (SOPs). Built with OpenAI Assistants API, OPSObot is a **hosted service** that helps squadrons upload their SOP documents and provides interactive Q&A and quiz functionality to keep members sharp on procedures.
 
 ## Features
 
-- **Multi-Guild Support**: Each Discord server can configure its own OpenAI API key and upload its own SOP documents
+- **Hosted Service**: Centralized API key management - no need for users to provide their own OpenAI keys
+- **Per-Server Isolation**: Each Discord server gets its own dedicated vector store for complete document isolation
 - **Document Upload**: Admins can upload PDF SOP documents that the bot uses to answer questions
 - **Q&A System**: Ask questions about your SOPs and get answers grounded in your uploaded documents
 - **Quiz System**: Generate timed quizzes from your SOP documents to test squadron knowledge
 - **Intelligent Responses**: Powered by GPT-4 with vector search for accurate, citation-backed answers
+- **Monetization Ready**: Architecture supports subscription tiers and premium features
+
+## Architecture
+
+### Centralized Management
+- Single OpenAI API key controlled by bot owner
+- Reduces complexity for end users
+- Enables hosted SaaS model with potential for premium tiers
+
+### Per-Guild Isolation
+- Each Discord server gets its own OpenAI Assistant
+- Each server has a dedicated Vector Store for documents
+- **Zero cross-contamination**: Server A's documents are never accessible to Server B
+- Documents are tagged and isolated at the vector store level
 
 ## Setup
 
 ### Prerequisites
 
 - Discord bot token ([Create a bot](https://discord.com/developers/applications))
-- OpenAI API key (per server, configured after bot joins)
+- OpenAI API key (bot owner provides this - users don't need their own)
 - Python 3.11+
 
 ### Installation
@@ -34,8 +49,7 @@ pip install -r requirements.txt
 3. Set environment variables:
 ```bash
 export DISCORD_TOKEN="your-discord-bot-token"
-# Optional: Set a global fallback API key
-export OPENAI_API_KEY="your-openai-api-key"
+export OPENAI_API_KEY="your-openai-api-key"  # Bot owner's key
 ```
 
 4. Run the bot:
@@ -63,17 +77,17 @@ python app.py
 
 ### Server Configuration (Admin Only)
 
-1. **Configure the bot for your server**:
+1. **Initialize the bot for your server**:
 ```
-/setup api_key:<your-openai-api-key>
+/setup
 ```
-This creates a dedicated OpenAI Assistant and vector store for your server.
+This creates a dedicated OpenAI Assistant and isolated vector store for your server. No API key needed from you!
 
 2. **Upload SOP documents**:
 ```
 /upload document:<attach-pdf-file>
 ```
-Upload your squadron's SOP PDFs. The bot will process and index them.
+Upload your squadron's SOP PDFs. The bot will process and index them in your server's private vector store.
 
 3. **View uploaded documents**:
 ```
@@ -117,25 +131,33 @@ Upload your squadron's SOP PDFs. The bot will process and index them.
 
 ## How It Works
 
-1. **Per-Guild Configuration**: Each Discord server gets its own OpenAI Assistant and vector store
-2. **Document Processing**: Uploaded PDFs are sent to OpenAI's vector store for semantic search
-3. **Grounded Responses**: All answers are grounded in the uploaded documents with page citations
-4. **Quiz Generation**: The AI generates diverse multiple-choice questions from document content
-5. **Interactive Quizzes**: Timed quizzes with button-based answers and automatic scoring
+1. **Centralized API**: Bot owner provides a single OpenAI API key
+2. **Per-Guild Setup**: Each Discord server runs `/setup` to create their own Assistant and Vector Store
+3. **Document Isolation**: Uploaded PDFs go into the server's dedicated vector store
+4. **Grounded Responses**: All answers use only documents from that server's vector store
+5. **Quiz Generation**: AI generates diverse multiple-choice questions from server-specific documents
 
-## Architecture
+## Security & Privacy
 
-- **Discord.py**: Discord bot framework with slash commands
-- **OpenAI Assistants API v2**: AI-powered Q&A with file search capability
-- **Vector Stores**: Document embeddings for semantic search
-- **JSON Storage**: Simple file-based storage for guild configurations (see `guild_configs.example.json` for structure)
+- **API Key**: Centrally managed by bot owner - users never handle OpenAI credentials
+- **Document Isolation**: Each server's documents are stored in a separate vector store
+- **No Cross-Contamination**: Vector store IDs ensure complete data separation between servers
+- **Admin Controls**: Only server administrators can configure and upload documents
+- **Local Config**: Server configurations stored in `guild_configs.json` (no API keys stored)
 
-## Security Notes
+## Monetization Model
 
-- API keys are stored locally in `guild_configs.json`
-- Each guild's API key is only used for that guild's operations
-- Admin permissions required for setup and document uploads
-- Documents are stored in OpenAI's secure infrastructure
+The architecture supports various monetization strategies:
+
+- **Free Tier**: Basic setup with limited documents/queries
+- **Premium Tier**: Unlimited documents, priority support, advanced features
+- **Enterprise**: Custom integrations, dedicated support, SLA guarantees
+
+The centralized API key model allows the bot owner to:
+- Track usage per guild
+- Implement rate limiting
+- Enforce tier limits
+- Bill based on actual usage
 
 ## Deployment
 
@@ -144,10 +166,17 @@ Upload your squadron's SOP PDFs. The bot will process and index them.
 The bot includes a `railway.json` and `Dockerfile` for easy deployment:
 
 1. Connect your GitHub repo to Railway
-2. Set the `DISCORD_TOKEN` environment variable
+2. Set the `DISCORD_TOKEN` and `OPENAI_API_KEY` environment variables
 3. Deploy!
 
-Guilds will still need to configure their own API keys using `/setup`.
+Each guild will still need to run `/setup` to initialize their assistant and vector store.
+
+## Technical Details
+
+- **Discord.py**: Discord bot framework with slash commands
+- **OpenAI Assistants API v2**: AI-powered Q&A with file search capability
+- **Vector Stores**: Document embeddings for semantic search (see `guild_configs.example.json` for structure)
+- **JSON Storage**: Simple file-based storage for guild configurations
 
 ## License
 
@@ -169,7 +198,7 @@ For issues or questions, please open a GitHub issue.
 - Check that the bot has permissions in the channel (Send Messages, Embed Links, etc.)
 
 ### `/setup` fails
-- Verify your OpenAI API key is valid and has credits
+- Verify the `OPENAI_API_KEY` environment variable is set correctly (bot owner)
 - Check that you have access to the Assistants API (may require a paid OpenAI account)
 - Ensure you're running the command in a server (not DMs) and have Administrator permissions
 
@@ -179,7 +208,7 @@ For issues or questions, please open a GitHub issue.
 - Ensure the file isn't too large (OpenAI has file size limits)
 
 ### Questions return "not configured" error
-- An admin needs to run `/setup` first to configure the server
+- An admin needs to run `/setup` first to initialize the server
 - Check that documents have been uploaded with `/upload`
 - Try `/info` to see the server's configuration status
 
@@ -188,4 +217,6 @@ For issues or questions, please open a GitHub issue.
 - Try specifying a `topic` parameter in `/quiz_start` to focus on specific areas
 - The bot attempts to generate diverse questions, but limited source material may result in similar questions
 
-
+### Documents from other servers appearing
+- This should never happen! Each server has its own isolated vector store
+- If you experience this, please report it immediately as it's a critical bug

@@ -1,7 +1,7 @@
 """
 OPSObot - DCS Squadron SOP Discord Bot
 Multi-guild PDF-grounded Q&A and Quiz system using OpenAI Assistants API
-Allows each Discord server to upload their own SOP documents and configure their own OpenAI API keys
+Hosted service with centralized API key and per-guild vector stores for document isolation
 """
 import os
 import asyncio
@@ -19,14 +19,20 @@ from fuzzywuzzy import fuzz
 
 # Environment variables
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
-# Global OpenAI API key is now optional - guilds can configure their own
-GLOBAL_OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+# Centralized OpenAI API key (required for hosted service model)
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
 # --- Discord client setup ---
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+
+# --- OpenAI client (centralized) ---
+oai = OpenAI(
+    api_key=OPENAI_API_KEY,
+    default_headers={"OpenAI-Beta": "assistants=v2"}
+)
 
 # --- Guild Configuration Storage ---
 CONFIG_FILE = "guild_configs.json"
@@ -52,36 +58,6 @@ def save_guild_configs(configs: Dict):
 
 GUILD_CONFIGS = load_guild_configs()
 
-def get_openai_client(guild_id: Optional[int]) -> Optional[OpenAI]:
-    """
-    Get OpenAI client for a specific guild.
-    Returns None if guild is not configured.
-    """
-    if guild_id is None:
-        # DM - use global key if available
-        if GLOBAL_OPENAI_API_KEY:
-            return OpenAI(
-                api_key=GLOBAL_OPENAI_API_KEY,
-                default_headers={"OpenAI-Beta": "assistants=v2"}
-            )
-        return None
-    
-    guild_key = str(guild_id)
-    if guild_key in GUILD_CONFIGS and "api_key" in GUILD_CONFIGS[guild_key]:
-        api_key = GUILD_CONFIGS[guild_key]["api_key"]
-        return OpenAI(
-            api_key=api_key,
-            default_headers={"OpenAI-Beta": "assistants=v2"}
-        )
-    elif GLOBAL_OPENAI_API_KEY:
-        # Fall back to global key
-        return OpenAI(
-            api_key=GLOBAL_OPENAI_API_KEY,
-            default_headers={"OpenAI-Beta": "assistants=v2"}
-        )
-    
-    return None
-
 def get_assistant_id(guild_id: Optional[int]) -> Optional[str]:
     """Get the assistant ID for a specific guild."""
     if guild_id is None:
@@ -90,6 +66,17 @@ def get_assistant_id(guild_id: Optional[int]) -> Optional[str]:
     guild_key = str(guild_id)
     if guild_key in GUILD_CONFIGS:
         return GUILD_CONFIGS[guild_key].get("assistant_id")
+    
+    return None
+
+def get_vector_store_id(guild_id: Optional[int]) -> Optional[str]:
+    """Get the vector store ID for a specific guild."""
+    if guild_id is None:
+        return None
+    
+    guild_key = str(guild_id)
+    if guild_key in GUILD_CONFIGS:
+        return GUILD_CONFIGS[guild_key].get("vector_store_id")
     
     return None
 
@@ -314,17 +301,13 @@ async def ask_assistant(user_msg: str, guild_id: Optional[int] = None, timeout: 
     
     Args:
         user_msg: The message/prompt to send to the assistant
-        guild_id: The guild ID to use for getting the appropriate OpenAI client and assistant
+        guild_id: The guild ID to use for getting the appropriate assistant
         timeout: Maximum seconds to wait for response
         temperature: Optional temperature for response generation (0.0-2.0)
     """
     api_logger.debug(f"ask_assistant called: msg_len={len(user_msg)} guild_id={guild_id} timeout={timeout} temperature={temperature}")
     
-    # Get guild-specific OpenAI client and assistant ID
-    oai = get_openai_client(guild_id)
-    if not oai:
-        return "❌ This server hasn't been configured yet. An admin needs to run `/setup` first."
-    
+    # Get guild-specific assistant ID
     assistant_id = get_assistant_id(guild_id)
     if not assistant_id:
         return "❌ No assistant configured for this server. An admin needs to run `/setup` first."
@@ -1269,24 +1252,27 @@ async def info_command(interaction: discord.Interaction):
     
     embed = discord.Embed(
         title="🎯 OPSObot",
-        description="AI-powered Q&A and quiz bot for DCS Squadron SOPs",
+        description="AI-powered Q&A and quiz bot for DCS Squadron SOPs\n🚀 Hosted service with centralized management",
         color=0x2d5016  # Forest green
     )
     embed.add_field(name="Model", value="GPT-4 (via OpenAI Assistants)", inline=True)
     embed.add_field(name="Servers", value=str(len(client.guilds)), inline=True)
-    embed.add_field(name="Version", value="2.0.0", inline=True)
+    embed.add_field(name="Version", value="2.1.0", inline=True)
     
     if is_configured:
-        embed.add_field(name="Server Status", value="✅ Configured", inline=False)
+        embed.add_field(name="Server Status", value="✅ Configured & Isolated", inline=False)
         # Show document count if available
         doc_count = len(GUILD_CONFIGS[guild_key].get("documents", []))
         embed.add_field(name="Documents", value=str(doc_count), inline=True)
+        # Show vector store ID
+        vector_store_id = GUILD_CONFIGS[guild_key].get("vector_store_id", "N/A")
+        embed.add_field(name="Vector Store", value=f"`{vector_store_id[:20]}...`", inline=True)
     else:
         embed.add_field(name="Server Status", value="⚠️ Not configured - Admin needs to run `/setup`", inline=False)
     
     embed.add_field(
         name="Commands",
-        value="• `/setup` - Configure bot (admin only)\n"
+        value="• `/setup` - Initialize bot (admin only)\n"
               "• `/upload` - Upload SOP documents (admin only)\n"
               "• `/list_documents` - View uploaded documents\n"
               "• `/remove_document` - Remove a document (admin only)\n"
@@ -1297,14 +1283,14 @@ async def info_command(interaction: discord.Interaction):
               "• `/quiz_end` - End quiz",
         inline=False
     )
-    embed.set_footer(text="Powered by OpenAI Assistants API v2")
+    embed.set_footer(text="Powered by OpenAI Assistants API v2 | Hosted service with per-server isolation")
     
     await interaction.response.send_message(embed=embed)
 
 
-@tree.command(name="setup", description="Configure the bot for this server (admin only)")
-async def setup_command(interaction: discord.Interaction, api_key: str):
-    """Configure OpenAI API key and create assistant for this guild."""
+@tree.command(name="setup", description="Initialize the bot for this server (admin only)")
+async def setup_command(interaction: discord.Interaction):
+    """Create assistant and vector store for this guild using centralized API key."""
     discord_logger.info(f"/setup command: user={interaction.user.name}({interaction.user.id}) guild={interaction.guild.name if interaction.guild else 'DM'}({interaction.guild_id})")
     
     # Only allow in guilds, not DMs
@@ -1318,17 +1304,23 @@ async def setup_command(interaction: discord.Interaction, api_key: str):
         await interaction.response.send_message("❌ You need Administrator permissions to use this command.", ephemeral=True)
         return
     
+    # Check if guild is already configured
+    guild_key = str(interaction.guild_id)
+    if guild_key in GUILD_CONFIGS and "assistant_id" in GUILD_CONFIGS[guild_key]:
+        await interaction.response.send_message(
+            "⚠️ **This server is already configured!**\n\n"
+            f"• Assistant ID: `{GUILD_CONFIGS[guild_key]['assistant_id']}`\n"
+            f"• Vector Store ID: `{GUILD_CONFIGS[guild_key]['vector_store_id']}`\n\n"
+            "If you need to reconfigure, please contact the bot administrator.",
+            ephemeral=True
+        )
+        return
+    
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     try:
-        # Create OpenAI client with provided key
-        test_client = OpenAI(
-            api_key=api_key,
-            default_headers={"OpenAI-Beta": "assistants=v2"}
-        )
-        
         # Create a new assistant for this guild
-        assistant = test_client.beta.assistants.create(
+        assistant = oai.beta.assistants.create(
             name=f"OPSObot - {interaction.guild.name}",
             instructions="""You are an expert assistant for DCS (Digital Combat Simulator) squadron Standard Operating Procedures (SOPs).
             
@@ -1353,41 +1345,40 @@ When generating quiz questions:
             tools=[{"type": "file_search"}]
         )
         
-        # Create a vector store for documents
-        vector_store = test_client.beta.vector_stores.create(
+        # Create a vector store for documents (isolated per guild)
+        vector_store = oai.beta.vector_stores.create(
             name=f"OPSObot - {interaction.guild.name} - SOPs"
         )
         
         # Update assistant to use vector store
-        test_client.beta.assistants.update(
+        oai.beta.assistants.update(
             assistant_id=assistant.id,
             tool_resources={"file_search": {"vector_store_ids": [vector_store.id]}}
         )
         
-        # Store configuration
-        guild_key = str(interaction.guild_id)
+        # Store configuration (no API key stored - using centralized key)
         GUILD_CONFIGS[guild_key] = {
-            "api_key": api_key,
             "assistant_id": assistant.id,
             "vector_store_id": vector_store.id,
             "documents": [],
             "configured_at": datetime.utcnow().isoformat(),
-            "configured_by": str(interaction.user.id)
+            "configured_by": str(interaction.user.id),
+            "guild_name": interaction.guild.name
         }
         save_guild_configs(GUILD_CONFIGS)
         
-        discord_logger.info(f"Setup complete for guild {interaction.guild.name}({interaction.guild_id}): assistant={assistant.id}")
+        discord_logger.info(f"Setup complete for guild {interaction.guild.name}({interaction.guild_id}): assistant={assistant.id}, vector_store={vector_store.id}")
         
         await interaction.followup.send(
             f"✅ **Setup Complete!**\n\n"
-            f"• OpenAI API key configured\n"
             f"• Assistant created: `{assistant.id}`\n"
-            f"• Vector store created: `{vector_store.id}`\n\n"
+            f"• Vector store created: `{vector_store.id}`\n"
+            f"• Documents are isolated to this server only\n\n"
             f"Next steps:\n"
             f"1. Use `/upload` to upload your SOP documents\n"
             f"2. Use `/ask` to ask questions about your SOPs\n"
             f"3. Use `/quiz_start` to test your squadron's knowledge\n\n"
-            f"⚠️ **Security Note:** Your API key is stored locally and used only for this server.",
+            f"🔒 **Privacy:** Your documents are stored in a dedicated vector store for this server only.",
             ephemeral=True
         )
         
@@ -1396,10 +1387,7 @@ When generating quiz questions:
         await interaction.followup.send(
             f"❌ **Setup Failed**\n\n"
             f"Error: {str(e)}\n\n"
-            f"Please check:\n"
-            f"• Your API key is valid\n"
-            f"• Your API key has sufficient credits\n"
-            f"• You have access to the Assistants API",
+            f"Please contact the bot administrator if this issue persists.",
             ephemeral=True
         )
 
@@ -1437,19 +1425,13 @@ async def upload_command(interaction: discord.Interaction, document: discord.Att
         # Download the file
         file_data = await document.read()
         
-        # Get OpenAI client for this guild
-        oai = get_openai_client(interaction.guild_id)
-        if not oai:
-            await interaction.followup.send("❌ Failed to get OpenAI client.", ephemeral=True)
-            return
-        
-        # Upload file to OpenAI
+        # Upload file to OpenAI (using centralized client)
         file_obj = oai.files.create(
             file=(document.filename, file_data),
             purpose="assistants"
         )
         
-        # Add file to vector store
+        # Add file to guild's vector store (isolated per guild)
         vector_store_id = GUILD_CONFIGS[guild_key]["vector_store_id"]
         oai.beta.vector_stores.files.create(
             vector_store_id=vector_store_id,
@@ -1469,14 +1451,15 @@ async def upload_command(interaction: discord.Interaction, document: discord.Att
         })
         save_guild_configs(GUILD_CONFIGS)
         
-        discord_logger.info(f"Document uploaded for guild {interaction.guild_id}: {document.filename} (file_id={file_obj.id})")
+        discord_logger.info(f"Document uploaded for guild {interaction.guild_id}: {document.filename} (file_id={file_obj.id}, vector_store={vector_store_id})")
         
         await interaction.followup.send(
             f"✅ **Document Uploaded!**\n\n"
             f"• Filename: `{document.filename}`\n"
             f"• File ID: `{file_obj.id}`\n"
-            f"• Size: {len(file_data) / 1024:.1f} KB\n\n"
-            f"The document is now available for questions and quizzes!",
+            f"• Size: {len(file_data) / 1024:.1f} KB\n"
+            f"• Vector Store: `{vector_store_id}`\n\n"
+            f"🔒 The document is isolated to this server's vector store and available for questions and quizzes!",
             ephemeral=True
         )
         
@@ -1578,13 +1561,7 @@ async def remove_document_command(interaction: discord.Interaction, file_id: str
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     try:
-        # Get OpenAI client for this guild
-        oai = get_openai_client(interaction.guild_id)
-        if not oai:
-            await interaction.followup.send("❌ Failed to get OpenAI client.", ephemeral=True)
-            return
-        
-        # Remove file from vector store
+        # Remove file from guild's vector store (using centralized client)
         vector_store_id = GUILD_CONFIGS[guild_key]["vector_store_id"]
         try:
             oai.beta.vector_stores.files.delete(
