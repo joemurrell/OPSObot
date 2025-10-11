@@ -128,7 +128,7 @@ Upload your squadron's SOP PDFs. The bot will process and index them.
 - **Discord.py**: Discord bot framework with slash commands
 - **OpenAI Assistants API v2**: AI-powered Q&A with file search capability
 - **Vector Stores**: Document embeddings for semantic search
-- **JSON Storage**: Simple file-based storage for guild configurations
+- **JSON Storage**: Simple file-based storage for guild configurations (see `guild_configs.example.json` for structure)
 
 ## Security Notes
 
@@ -160,4 +160,32 @@ Contributions welcome! Please open an issue or PR.
 ## Support
 
 For issues or questions, please open a GitHub issue.
+
+## Troubleshooting
+
+### Bot doesn't respond to commands
+- Ensure the bot has been added to your server with the correct permissions
+- Run `/info` to check if the server is configured
+- Check that the bot has permissions in the channel (Send Messages, Embed Links, etc.)
+
+### `/setup` fails
+- Verify your OpenAI API key is valid and has credits
+- Check that you have access to the Assistants API (may require a paid OpenAI account)
+- Ensure you're running the command in a server (not DMs) and have Administrator permissions
+
+### `/upload` fails
+- Only PDF files are supported currently
+- Check your OpenAI account has sufficient storage quota
+- Ensure the file isn't too large (OpenAI has file size limits)
+
+### Questions return "not configured" error
+- An admin needs to run `/setup` first to configure the server
+- Check that documents have been uploaded with `/upload`
+- Try `/info` to see the server's configuration status
+
+### Quiz questions are repetitive
+- Upload more diverse SOP documents
+- Try specifying a `topic` parameter in `/quiz_start` to focus on specific areas
+- The bot attempts to generate diverse questions, but limited source material may result in similar questions
+
 
