@@ -12,4 +12,3 @@ ENV/
 *.log
 logs/
 .DS_Store
-guild_configs.json

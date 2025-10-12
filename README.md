@@ -6,7 +6,7 @@ AI-powered Discord bot for DCS Squadron Standard Operating Procedures (SOPs). Bu
 
 - **Hosted Service**: Centralized API key management - no need for users to provide their own OpenAI keys
 - **Per-Server Isolation**: Each Discord server gets its own dedicated vector store for complete document isolation
-- **Document Upload**: Admins can upload PDF SOP documents that the bot uses to answer questions
+- **Document Upload**: Admins can upload various document types (PDF, Word, PowerPoint, text, images) that the bot uses to answer questions
 - **Q&A System**: Ask questions about your SOPs and get answers grounded in your uploaded documents
 - **Quiz System**: Generate timed quizzes from your SOP documents to test squadron knowledge
 - **Intelligent Responses**: Powered by GPT-4 with vector search for accurate, citation-backed answers
@@ -85,9 +85,15 @@ This creates a dedicated OpenAI Assistant and isolated vector store for your ser
 
 2. **Upload SOP documents**:
 ```
-/upload document:<attach-pdf-file>
+/upload document:<attach-file>
 ```
-Upload your squadron's SOP PDFs. The bot will process and index them in your server's private vector store.
+Upload your squadron's SOP documents. The bot will process and index them in your server's private vector store.
+
+**Supported file types**:
+- **Documents**: PDF, Word (.doc, .docx)
+- **Presentations**: PowerPoint (.ppt, .pptx)
+- **Text**: TXT, Markdown (.md)
+- **Images**: JPG, PNG, GIF, BMP, WebP
 
 3. **View uploaded documents**:
 ```
@@ -133,7 +139,7 @@ Upload your squadron's SOP PDFs. The bot will process and index them in your ser
 
 1. **Centralized API**: Bot owner provides a single OpenAI API key
 2. **Per-Guild Setup**: Each Discord server runs `/setup` to create their own Assistant and Vector Store
-3. **Document Isolation**: Uploaded PDFs go into the server's dedicated vector store
+3. **Document Isolation**: Uploaded documents go into the server's dedicated vector store
 4. **Grounded Responses**: All answers use only documents from that server's vector store
 5. **Quiz Generation**: AI generates diverse multiple-choice questions from server-specific documents
 
@@ -143,7 +149,8 @@ Upload your squadron's SOP PDFs. The bot will process and index them in your ser
 - **Document Isolation**: Each server's documents are stored in a separate vector store
 - **No Cross-Contamination**: Vector store IDs ensure complete data separation between servers
 - **Admin Controls**: Only server administrators can configure and upload documents
-- **Local Config**: Server configurations stored in `guild_configs.json` (no API keys stored)
+- **File Type Security**: Only safe document types allowed (no executable code or scripts)
+- **Local Config**: Server configurations stored in `guild_configs.json` (persisted with git repository)
 
 ## Monetization Model
 
@@ -170,6 +177,8 @@ The bot includes a `railway.json` and `Dockerfile` for easy deployment:
 3. Deploy!
 
 Each guild will still need to run `/setup` to initialize their assistant and vector store.
+
+**Configuration Persistence**: Guild configurations are stored in `guild_configs.json` which is now tracked in git. This ensures that server setups persist across deployments and restarts. The bot will automatically load existing configurations on startup.
 
 ## Technical Details
 
@@ -203,9 +212,10 @@ For issues or questions, please open a GitHub issue.
 - Ensure you're running the command in a server (not DMs) and have Administrator permissions
 
 ### `/upload` fails
-- Only PDF files are supported currently
-- Check your OpenAI account has sufficient storage quota
+- Check that your file type is supported (PDF, Word, PowerPoint, text, or image files)
+- Verify your OpenAI account has sufficient storage quota
 - Ensure the file isn't too large (OpenAI has file size limits)
+- For security, only common document types are allowed (no .py, .exe, .sh, etc.)
 
 ### Questions return "not configured" error
 - An admin needs to run `/setup` first to initialize the server
