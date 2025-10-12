@@ -1341,7 +1341,7 @@ When generating quiz questions:
 - Include 4 multiple choice options
 - Provide clear explanations with page references
 - Focus on operationally relevant knowledge""",
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             tools=[{"type": "file_search"}]
         )
         
