@@ -57,7 +57,10 @@ def is_allowed_file(filename: str) -> bool:
     return ext in ALLOWED_FILE_EXTENSIONS
 
 # --- Guild Configuration Storage ---
-CONFIG_FILE = "guild_configs.json"
+# Support persistent volume at /data for Railway deployments
+# Falls back to local directory for development
+DATA_DIR = "/data" if os.path.exists("/data") else "."
+CONFIG_FILE = os.path.join(DATA_DIR, "guild_configs.json")
 
 def load_guild_configs() -> Dict:
     """Load guild configurations from file."""
@@ -66,7 +69,8 @@ def load_guild_configs() -> Dict:
             with open(CONFIG_FILE, 'r') as f:
                 return json.load(f)
         except Exception as e:
-            logger.error(f"Error loading guild configs: {e}")
+            # Logger not available at initial load time
+            print(f"Error loading guild configs: {e}")
             return {}
     return {}
 
@@ -75,8 +79,15 @@ def save_guild_configs(configs: Dict):
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(configs, f, indent=2)
+        # Log success if logger is available
+        if 'logger' in globals():
+            logger.info(f"Guild configs saved to {CONFIG_FILE}")
     except Exception as e:
-        logger.error(f"Error saving guild configs: {e}")
+        # Use logger if available, otherwise print
+        if 'logger' in globals():
+            logger.error(f"Error saving guild configs: {e}")
+        else:
+            print(f"Error saving guild configs: {e}")
 
 GUILD_CONFIGS = load_guild_configs()
 
@@ -133,6 +144,14 @@ logger.setLevel(logging.DEBUG)
 discord_logger.setLevel(logging.DEBUG)
 quiz_logger.setLevel(logging.DEBUG)
 api_logger.setLevel(logging.INFO)
+
+# Log configuration file location
+logger.info(f"Using configuration file: {CONFIG_FILE}")
+logger.info(f"Data directory: {DATA_DIR}")
+if os.path.exists(CONFIG_FILE):
+    logger.info(f"Loaded {len(GUILD_CONFIGS)} guild configuration(s)")
+else:
+    logger.info("No existing configuration file found, starting fresh")
 
 # In-memory quiz state (per-channel)
 QUIZ_STATE = {}
