@@ -1346,7 +1346,7 @@ When generating quiz questions:
         )
         
         # Create a vector store for documents (isolated per guild)
-        vector_store = oai.beta.vector_stores.create(
+        vector_store = oai.vector_stores.create(
             name=f"OPSObot - {interaction.guild.name} - SOPs"
         )
         
@@ -1433,7 +1433,7 @@ async def upload_command(interaction: discord.Interaction, document: discord.Att
         
         # Add file to guild's vector store (isolated per guild)
         vector_store_id = GUILD_CONFIGS[guild_key]["vector_store_id"]
-        oai.beta.vector_stores.files.create(
+        oai.vector_stores.files.create(
             vector_store_id=vector_store_id,
             file_id=file_obj.id
         )
@@ -1564,7 +1564,7 @@ async def remove_document_command(interaction: discord.Interaction, file_id: str
         # Remove file from guild's vector store (using centralized client)
         vector_store_id = GUILD_CONFIGS[guild_key]["vector_store_id"]
         try:
-            oai.beta.vector_stores.files.delete(
+            oai.vector_stores.files.delete(
                 vector_store_id=vector_store_id,
                 file_id=file_id
             )
