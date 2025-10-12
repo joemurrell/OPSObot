@@ -34,6 +34,28 @@ oai = OpenAI(
     default_headers={"OpenAI-Beta": "assistants=v2"}
 )
 
+# --- File Upload Security ---
+# Allowed file extensions for document uploads
+# Restricts uploads to common document types to prevent malicious file uploads
+ALLOWED_FILE_EXTENSIONS = {
+    # Document formats
+    '.pdf', '.doc', '.docx',
+    # Presentation formats
+    '.ppt', '.pptx',
+    # Text formats
+    '.txt', '.md',
+    # Image formats
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'
+}
+
+def is_allowed_file(filename: str) -> bool:
+    """Check if a file extension is allowed for upload."""
+    if not filename:
+        return False
+    # Get file extension and normalize to lowercase
+    ext = os.path.splitext(filename.lower())[1]
+    return ext in ALLOWED_FILE_EXTENSIONS
+
 # --- Guild Configuration Storage ---
 CONFIG_FILE = "guild_configs.json"
 
@@ -1414,9 +1436,19 @@ async def upload_command(interaction: discord.Interaction, document: discord.Att
         await interaction.response.send_message("❌ This server hasn't been configured yet. Run `/setup` first.", ephemeral=True)
         return
     
-    # Check file type (only allow PDFs for now)
-    if not document.filename.lower().endswith('.pdf'):
-        await interaction.response.send_message("❌ Only PDF files are supported currently.", ephemeral=True)
+    # Check file type - only allow safe document types
+    if not is_allowed_file(document.filename):
+        allowed_exts = ', '.join(sorted(ALLOWED_FILE_EXTENSIONS))
+        await interaction.response.send_message(
+            f"❌ **File type not allowed**\n\n"
+            f"For security reasons, only the following file types are supported:\n"
+            f"• **Documents**: PDF, Word (.doc, .docx)\n"
+            f"• **Presentations**: PowerPoint (.ppt, .pptx)\n"
+            f"• **Text**: TXT, Markdown (.md)\n"
+            f"• **Images**: JPG, PNG, GIF, BMP, WebP\n\n"
+            f"Your file: `{document.filename}`",
+            ephemeral=True
+        )
         return
     
     await interaction.response.defer(ephemeral=True, thinking=True)
