@@ -1,0 +1,18 @@
+{
+  "123456789012345678": {
+    "assistant_id": "asst_xxxxxxxxxxxxxxxxxxxxx",
+    "vector_store_id": "vs_xxxxxxxxxxxxxxxxxxxxx",
+    "documents": [
+      {
+        "filename": "example_sop.pdf",
+        "file_id": "file-xxxxxxxxxxxxxxxxxxxxx",
+        "uploaded_at": "2024-01-01T00:00:00.000000",
+        "uploaded_by": "123456789012345678",
+        "size_bytes": 102400
+      }
+    ],
+    "configured_at": "2024-01-01T00:00:00.000000",
+    "configured_by": "123456789012345678",
+    "guild_name": "Example Squadron"
+  }
+}

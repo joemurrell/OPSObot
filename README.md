@@ -150,7 +150,7 @@ Upload your squadron's SOP documents. The bot will process and index them in you
 - **No Cross-Contamination**: Vector store IDs ensure complete data separation between servers
 - **Admin Controls**: Only server administrators can configure and upload documents
 - **File Type Security**: Only safe document types allowed (no executable code or scripts)
-- **Local Config**: Server configurations stored in `guild_configs.json` (persisted with git repository)
+- **Local Config**: Server configurations stored in `guild_configs.json` (persisted in Railway volume or local directory)
 
 ## Monetization Model
 
@@ -174,11 +174,19 @@ The bot includes a `railway.json` and `Dockerfile` for easy deployment:
 
 1. Connect your GitHub repo to Railway
 2. Set the `DISCORD_TOKEN` and `OPENAI_API_KEY` environment variables
-3. Deploy!
+3. **Add a persistent volume** to ensure guild configurations survive deployments:
+   - In Railway dashboard, go to your service
+   - Click "Variables" tab, then "Volume" section
+   - Click "Add Volume"
+   - Set mount path: `/data`
+   - Set volume size: 1GB (or more if needed)
+4. Deploy!
 
 Each guild will still need to run `/setup` to initialize their assistant and vector store.
 
-**Configuration Persistence**: Guild configurations are stored in `guild_configs.json` which is now tracked in git. This ensures that server setups persist across deployments and restarts. The bot will automatically load existing configurations on startup.
+**Configuration Persistence**: Guild configurations are stored in `guild_configs.json` within the `/data` volume (or local directory for development). This ensures that server setups persist across deployments and restarts. The bot will automatically load existing configurations on startup.
+
+**Note**: Without a persistent volume, guild configurations will be lost on each new deployment. The volume ensures your data persists even when the container is rebuilt.
 
 ## Technical Details
 
