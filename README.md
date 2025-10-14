@@ -154,11 +154,19 @@ Upload your squadron's SOP documents. The bot will process and index them in you
 
 ## Monetization Model
 
-The architecture supports various monetization strategies:
+The bot now includes built-in monetization features using Discord's native monetization system:
 
-- **Free Tier**: Basic setup with limited documents/queries
-- **Premium Tier**: Unlimited documents, priority support, advanced features
-- **Enterprise**: Custom integrations, dedicated support, SLA guarantees
+### Free Tier
+- File uploads: Up to **5 MB** per document
+- `/ask` command: **3 queries per day**
+- `/quiz_start` command: **1 quiz per day**
+
+### Premium Tier
+- File uploads: Up to **50 MB** per document
+- `/ask` command: **Unlimited**
+- `/quiz_start` command: **Unlimited**
+
+For detailed information about limits and implementation, see [MONETIZATION_FEATURES.md](./MONETIZATION_FEATURES.md).
 
 The centralized API key model allows the bot owner to:
 - Track usage per guild
@@ -173,7 +181,10 @@ The centralized API key model allows the bot owner to:
 The bot includes a `railway.json` and `Dockerfile` for easy deployment:
 
 1. Connect your GitHub repo to Railway
-2. Set the `DISCORD_TOKEN` and `OPENAI_API_KEY` environment variables
+2. Set the required environment variables:
+   - `DISCORD_TOKEN` - Your Discord bot token
+   - `OPENAI_API_KEY` - Your OpenAI API key
+   - `PREMIUM_SKU_ID` (optional) - Your Discord premium tier SKU ID for monetization
 3. **Add a persistent volume** to ensure guild configurations survive deployments:
    - In Railway dashboard, go to your service
    - Click "Variables" tab, then "Volume" section
