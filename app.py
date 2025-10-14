@@ -21,6 +21,17 @@ from fuzzywuzzy import fuzz
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 # Centralized OpenAI API key (required for hosted service model)
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+# Optional: Premium SKU ID for Discord monetization (if not set, all users are treated as free tier)
+PREMIUM_SKU_ID = os.environ.get("PREMIUM_SKU_ID")
+
+# --- Monetization Limits ---
+# File size limits in bytes
+FREE_TIER_MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB for free tier
+PREMIUM_TIER_MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB for premium tier
+
+# Daily usage limits for free tier
+FREE_TIER_ASK_LIMIT = 3  # 3 asks per day
+FREE_TIER_QUIZ_LIMIT = 1  # 1 quiz per day
 
 # --- Discord client setup ---
 intents = discord.Intents.default()
@@ -90,6 +101,69 @@ def save_guild_configs(configs: Dict):
             print(f"Error saving guild configs: {e}")
 
 GUILD_CONFIGS = load_guild_configs()
+
+# --- Usage Tracking Functions ---
+
+def get_today_key() -> str:
+    """Get today's date as a key for usage tracking (UTC)."""
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+def init_guild_usage_tracking(guild_key: str):
+    """Initialize usage tracking structure for a guild if it doesn't exist."""
+    if "usage_tracking" not in GUILD_CONFIGS[guild_key]:
+        GUILD_CONFIGS[guild_key]["usage_tracking"] = {}
+    
+def get_user_usage(guild_key: str, user_id: str) -> dict:
+    """Get usage data for a specific user in a guild."""
+    init_guild_usage_tracking(guild_key)
+    today = get_today_key()
+    
+    usage_data = GUILD_CONFIGS[guild_key]["usage_tracking"]
+    
+    # Clean up old dates (keep only today and yesterday for safety)
+    dates_to_keep = [today, (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")]
+    for date in list(usage_data.keys()):
+        if date not in dates_to_keep:
+            del usage_data[date]
+    
+    # Initialize today's data if needed
+    if today not in usage_data:
+        usage_data[today] = {}
+    
+    # Initialize user's data if needed
+    if user_id not in usage_data[today]:
+        usage_data[today][user_id] = {
+            "asks": 0,
+            "quizzes": 0
+        }
+    
+    return usage_data[today][user_id]
+
+def increment_user_usage(guild_key: str, user_id: str, usage_type: str):
+    """Increment usage counter for a user."""
+    user_usage = get_user_usage(guild_key, user_id)
+    user_usage[usage_type] = user_usage.get(usage_type, 0) + 1
+    save_guild_configs(GUILD_CONFIGS)
+
+async def check_premium_status(user_id: int) -> bool:
+    """
+    Check if a user has premium tier via Discord entitlements.
+    Returns True if premium, False otherwise.
+    """
+    # If no SKU ID is configured, treat everyone as free tier
+    if not PREMIUM_SKU_ID:
+        return False
+    
+    try:
+        # Check user's entitlements for the premium SKU
+        # Discord.py doesn't have built-in entitlement checking yet,
+        # so we'll use the REST API directly
+        # For now, return False (free tier) until Discord entitlements are fully set up
+        # In production, you would check: client.http.request(...)
+        return False
+    except Exception as e:
+        logger.error(f"Error checking premium status for user {user_id}: {e}")
+        return False
 
 def get_assistant_id(guild_id: Optional[int]) -> Optional[str]:
     """Get the assistant ID for a specific guild."""
@@ -1009,6 +1083,29 @@ async def ask_command(interaction: discord.Interaction, question: str):
         await interaction.response.send_message(perm_error, ephemeral=True)
         return
     
+    # Check usage limits
+    guild_key = str(interaction.guild_id) if interaction.guild_id else None
+    if guild_key and guild_key in GUILD_CONFIGS:
+        user_id = str(interaction.user.id)
+        is_premium = await check_premium_status(interaction.user.id)
+        
+        if not is_premium:
+            user_usage = get_user_usage(guild_key, user_id)
+            asks_today = user_usage.get("asks", 0)
+            
+            if asks_today >= FREE_TIER_ASK_LIMIT:
+                discord_logger.info(f"/ask limit reached for user {interaction.user.name}({interaction.user.id}): {asks_today}/{FREE_TIER_ASK_LIMIT}")
+                await interaction.response.send_message(
+                    f"❌ **Daily limit reached** ({asks_today}/{FREE_TIER_ASK_LIMIT} asks today)\n\n"
+                    f"🌟 **Upgrade to Premium for:**\n"
+                    f"• Unlimited `/ask` queries\n"
+                    f"• Unlimited quizzes\n"
+                    f"• Larger document uploads (up to 50 MB)\n\n"
+                    f"Your limit resets at midnight UTC.",
+                    ephemeral=True
+                )
+                return
+    
     await interaction.response.defer(thinking=True)
     
     enhanced_question = f"{question}\n\n(Answer using ONLY information from the attached PDF documentation. Include page numbers when possible. If the answer isn't in the PDF, say so clearly. Your response MUST be less than 2000 characters to fit in a Discord message.)"
@@ -1023,6 +1120,14 @@ async def ask_command(interaction: discord.Interaction, question: str):
         api_logger.warning(f"Answer truncated to 1998 characters")
     
     await interaction.followup.send(answer)
+    
+    # Increment usage counter after successful ask
+    if guild_key and guild_key in GUILD_CONFIGS:
+        user_id = str(interaction.user.id)
+        is_premium = await check_premium_status(interaction.user.id)
+        if not is_premium:
+            increment_user_usage(guild_key, user_id, "asks")
+    
     discord_logger.info(f"/ask completed for user {interaction.user.name}({interaction.user.id})")
 
 
@@ -1037,6 +1142,29 @@ async def quiz_start(interaction: discord.Interaction, topic: str = "", question
         discord_logger.warning(f"/quiz_start permission denied for user {interaction.user.name}({interaction.user.id}) in channel {interaction.channel_id}")
         await interaction.response.send_message(perm_error, ephemeral=True)
         return
+    
+    # Check usage limits
+    guild_key = str(interaction.guild_id) if interaction.guild_id else None
+    if guild_key and guild_key in GUILD_CONFIGS:
+        user_id = str(interaction.user.id)
+        is_premium = await check_premium_status(interaction.user.id)
+        
+        if not is_premium:
+            user_usage = get_user_usage(guild_key, user_id)
+            quizzes_today = user_usage.get("quizzes", 0)
+            
+            if quizzes_today >= FREE_TIER_QUIZ_LIMIT:
+                discord_logger.info(f"/quiz_start limit reached for user {interaction.user.name}({interaction.user.id}): {quizzes_today}/{FREE_TIER_QUIZ_LIMIT}")
+                await interaction.response.send_message(
+                    f"❌ **Daily limit reached** ({quizzes_today}/{FREE_TIER_QUIZ_LIMIT} quiz today)\n\n"
+                    f"🌟 **Upgrade to Premium for:**\n"
+                    f"• Unlimited quizzes\n"
+                    f"• Unlimited `/ask` queries\n"
+                    f"• Larger document uploads (up to 50 MB)\n\n"
+                    f"Your limit resets at midnight UTC.",
+                    ephemeral=True
+                )
+                return
     
     if questions < 1 or questions > 10:
         discord_logger.warning(f"/quiz_start invalid question count {questions} from user {interaction.user.name}({interaction.user.id})")
@@ -1089,6 +1217,13 @@ async def quiz_start(interaction: discord.Interaction, topic: str = "", question
         "duration_minutes": duration,
         "initiator": interaction.user.id
     }
+    
+    # Increment usage counter after successful quiz start
+    if guild_key and guild_key in GUILD_CONFIGS:
+        user_id = str(interaction.user.id)
+        is_premium = await check_premium_status(interaction.user.id)
+        if not is_premium:
+            increment_user_usage(guild_key, user_id, "quizzes")
     
     quiz_logger.info(f"Quiz started in channel {interaction.channel_id} by user {interaction.user.name}({interaction.user.id}): {len(shuffled_questions)} questions, {duration} minutes")
     
@@ -1470,6 +1605,35 @@ async def upload_command(interaction: discord.Interaction, document: discord.Att
         )
         return
     
+    # Check file size limits based on premium status
+    is_premium = await check_premium_status(interaction.user.id)
+    max_file_size = PREMIUM_TIER_MAX_FILE_SIZE if is_premium else FREE_TIER_MAX_FILE_SIZE
+    
+    if document.size > max_file_size:
+        size_mb = document.size / (1024 * 1024)
+        limit_mb = max_file_size / (1024 * 1024)
+        
+        if is_premium:
+            await interaction.response.send_message(
+                f"❌ **File too large**\n\n"
+                f"• Your file: **{size_mb:.1f} MB**\n"
+                f"• Premium limit: **{limit_mb:.0f} MB**\n\n"
+                f"Please upload a smaller file.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"❌ **File too large for free tier**\n\n"
+                f"• Your file: **{size_mb:.1f} MB**\n"
+                f"• Free tier limit: **{limit_mb:.0f} MB**\n\n"
+                f"🌟 **Upgrade to Premium for:**\n"
+                f"• Upload files up to **{PREMIUM_TIER_MAX_FILE_SIZE / (1024 * 1024):.0f} MB**\n"
+                f"• Unlimited `/ask` queries\n"
+                f"• Unlimited quizzes",
+                ephemeral=True
+            )
+        return
+    
     await interaction.response.defer(ephemeral=True, thinking=True)
     
     try:
@@ -1504,11 +1668,15 @@ async def upload_command(interaction: discord.Interaction, document: discord.Att
         
         discord_logger.info(f"Document uploaded for guild {interaction.guild_id}: {document.filename} (file_id={file_obj.id}, vector_store={vector_store_id})")
         
+        size_mb = len(file_data) / (1024 * 1024)
+        tier_info = "✨ Premium" if is_premium else f"Free tier ({FREE_TIER_MAX_FILE_SIZE / (1024 * 1024):.0f} MB limit)"
+        
         await interaction.followup.send(
             f"✅ **Document Uploaded!**\n\n"
             f"• Filename: `{document.filename}`\n"
             f"• File ID: `{file_obj.id}`\n"
-            f"• Size: {len(file_data) / 1024:.1f} KB\n"
+            f"• Size: **{size_mb:.2f} MB**\n"
+            f"• Tier: {tier_info}\n"
             f"• Vector Store: `{vector_store_id}`\n\n"
             f"🔒 The document is isolated to this server's vector store and available for questions and quizzes!",
             ephemeral=True
