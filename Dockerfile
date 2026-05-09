@@ -11,4 +11,7 @@ COPY app.py .
 # This will be used if Railway volume is mounted at /data
 RUN mkdir -p /data
 
+RUN useradd -U -u 1000 appuser && chown -R 1000:1000 /app /data
+USER 1000
+
 CMD ["python", "app.py"]
