@@ -3,3 +3,5 @@ openai==2.3.0
 httpx==0.28.1
 fuzzywuzzy==0.18.0
 python-Levenshtein==0.27.1
+
+anyio==4.14.2
